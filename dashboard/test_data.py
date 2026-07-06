@@ -1,0 +1,432 @@
+"""
+test_data.py — Unit Tests for Dashboard Data Layer
+Tests the API client functions in data.py
+
+Run with:
+    pytest test_data.py -v
+
+Or with Docker:
+    docker exec airlines_dashboard pytest test_data.py -v
+"""
+
+import pytest
+import pandas as pd
+from unittest.mock import patch, MagicMock
+from data import (
+    get_flights_df,
+    get_airlines_list,
+    get_origins_list,
+    get_destinations_list,
+    get_dashboard_stats,
+    get_summary_stats,
+    api_healthy,
+    get_live_flights,
+    AIRLINE_MAP,
+    AIRLINES,
+    AIRPORTS,
+    _mock,
+)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Mock Data Tests
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestMockData:
+    """Test the mock data fallback."""
+
+    def test_mock_returns_dataframe(self):
+        df = _mock()
+        assert isinstance(df, pd.DataFrame)
+
+    def test_mock_has_2000_rows(self):
+        df = _mock()
+        assert len(df) == 2000
+
+    def test_mock_has_required_columns(self):
+        df = _mock()
+        required = ["FlightDate", "Operating_Airline", "Origin", "Dest",
+                     "Distance", "DepDelay", "Delayed"]
+        for col in required:
+            assert col in df.columns, f"Missing column: {col}"
+
+    def test_mock_has_month_column(self):
+        df = _mock()
+        assert "Month" in df.columns
+
+    def test_mock_has_day_of_week_column(self):
+        df = _mock()
+        assert "DayOfWeek" in df.columns
+
+    def test_mock_delayed_is_binary(self):
+        df = _mock()
+        assert set(df["Delayed"].unique()).issubset({0, 1})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Constants Tests
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestConstants:
+    """Test constant values."""
+
+    def test_airline_map_not_empty(self):
+        assert len(AIRLINE_MAP) > 0
+
+    def test_airline_map_has_common_airlines(self):
+        assert "AA" in AIRLINE_MAP  # American Airlines
+        assert "DL" in AIRLINE_MAP  # Delta
+        assert "UA" in AIRLINE_MAP  # United
+
+    def test_airlines_sorted(self):
+        assert AIRLINES == sorted(AIRLINES)
+
+    def test_airports_not_empty(self):
+        assert len(AIRPORTS) > 0
+
+    def test_airports_has_common_airports(self):
+        assert "ATL" in AIRPORTS
+        assert "JFK" in AIRPORTS
+        assert "LAX" in AIRPORTS
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# API Client Tests (with mocked requests)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestGetFlightsDf:
+    """Test get_flights_df() function."""
+
+    @patch('data.requests.get')
+    def test_returns_dataframe_on_success(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = [
+            {
+                "flight_id": 1,
+                "flightdate": "2024-01-01",
+                "airline": "AA",
+                "origin": "JFK",
+                "origincityname": "New York, NY",
+                "dest": "LAX",
+                "destcityname": "Los Angeles, CA",
+                "dep_delay": 10.0,
+                "dep_del15": False,
+                "distance": 2475.0,
+                "carrierdelay": 0,
+                "weatherdelay": 0,
+                "nasdelay": 0,
+                "securitydelay": 0,
+                "lateaircraftdelay": 0,
+            }
+        ]
+        mock_get.return_value = mock_response
+
+        df = get_flights_df()
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) > 0
+
+    @patch('data.requests.get')
+    def test_maps_airline_codes_to_names(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = [
+            {
+                "flight_id": 1,
+                "flightdate": "2024-01-01",
+                "airline": "AA",
+                "origin": "JFK",
+                "origincityname": "New York, NY",
+                "dest": "LAX",
+                "destcityname": "Los Angeles, CA",
+                "dep_delay": 10.0,
+                "dep_del15": False,
+                "distance": 2475.0,
+                "carrierdelay": 0,
+                "weatherdelay": 0,
+                "nasdelay": 0,
+                "securitydelay": 0,
+                "lateaircraftdelay": 0,
+            }
+        ]
+        mock_get.return_value = mock_response
+
+        df = get_flights_df()
+        assert df["Operating_Airline"].iloc[0] == "American Airlines"
+
+    @patch('data.requests.get')
+    def test_adds_month_column(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = [
+            {
+                "flight_id": 1,
+                "flightdate": "2024-03-15",
+                "airline": "DL",
+                "origin": "ATL",
+                "origincityname": "Atlanta, GA",
+                "dest": "LAX",
+                "destcityname": "Los Angeles, CA",
+                "dep_delay": 5.0,
+                "dep_del15": False,
+                "distance": 1946.0,
+                "carrierdelay": 0,
+                "weatherdelay": 0,
+                "nasdelay": 0,
+                "securitydelay": 0,
+                "lateaircraftdelay": 0,
+            }
+        ]
+        mock_get.return_value = mock_response
+
+        df = get_flights_df()
+        assert "Month" in df.columns
+        assert df["Month"].iloc[0] == 3
+
+    @patch('data.requests.get')
+    def test_adds_day_of_week_column(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = [
+            {
+                "flight_id": 1,
+                "flightdate": "2024-03-15",
+                "airline": "DL",
+                "origin": "ATL",
+                "origincityname": "Atlanta, GA",
+                "dest": "LAX",
+                "destcityname": "Los Angeles, CA",
+                "dep_delay": 5.0,
+                "dep_del15": False,
+                "distance": 1946.0,
+                "carrierdelay": 0,
+                "weatherdelay": 0,
+                "nasdelay": 0,
+                "securitydelay": 0,
+                "lateaircraftdelay": 0,
+            }
+        ]
+        mock_get.return_value = mock_response
+
+        df = get_flights_df()
+        assert "DayOfWeek" in df.columns
+
+    @patch('data.requests.get')
+    def test_fallback_on_api_error(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_get.return_value = mock_response
+
+        df = get_flights_df()
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 2000  # Mock data
+
+    @patch('data.requests.get')
+    def test_fallback_on_connection_error(self, mock_get):
+        import requests
+        mock_get.side_effect = requests.exceptions.ConnectionError("API down")
+
+        df = get_flights_df()
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 2000  # Mock data
+
+    @patch('data.requests.get')
+    def test_fallback_on_timeout(self, mock_get):
+        import requests
+        mock_get.side_effect = requests.exceptions.Timeout("Timeout")
+
+        df = get_flights_df()
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 2000  # Mock data
+
+
+class TestGetAirlinesList:
+    """Test get_airlines_list() function."""
+
+    @patch('data.requests.get')
+    def test_returns_list_on_success(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = ["AA", "DL", "UA"]
+        mock_get.return_value = mock_response
+
+        result = get_airlines_list()
+        assert isinstance(result, list)
+        assert len(result) == 3
+
+    @patch('data.requests.get')
+    def test_maps_codes_to_names(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = ["AA"]
+        mock_get.return_value = mock_response
+
+        result = get_airlines_list()
+        assert "American Airlines" in result
+
+    @patch('data.requests.get')
+    def test_fallback_on_error(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_get.return_value = mock_response
+
+        result = get_airlines_list()
+        assert isinstance(result, list)
+        assert len(result) > 0  # Returns AIRLINES constant
+
+
+class TestGetOriginsList:
+    """Test get_origins_list() function."""
+
+    @patch('data.requests.get')
+    def test_returns_list(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = ["ATL", "JFK", "LAX"]
+        mock_get.return_value = mock_response
+
+        result = get_origins_list()
+        assert isinstance(result, list)
+
+    @patch('data.requests.get')
+    def test_fallback_on_error(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_get.return_value = mock_response
+
+        result = get_origins_list()
+        assert isinstance(result, list)
+        assert len(result) > 0
+
+
+class TestGetDestinationsList:
+    """Test get_destinations_list() function."""
+
+    @patch('data.requests.get')
+    def test_returns_list(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = ["LAX", "SFO", "SEA"]
+        mock_get.return_value = mock_response
+
+        result = get_destinations_list()
+        assert isinstance(result, list)
+
+    @patch('data.requests.get')
+    def test_fallback_on_error(self, mock_get):
+        import requests
+        mock_get.side_effect = requests.exceptions.ConnectionError()
+
+        result = get_destinations_list()
+        assert isinstance(result, list)
+
+
+class TestGetDashboardStats:
+    """Test get_dashboard_stats() function."""
+
+    @patch('data.requests.get')
+    def test_returns_dict_on_success(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "total_flights": 560352,
+            "delay_rate": 28.1,
+            "avg_delay_minutes": 12.5,
+            "delay_by_day": []
+        }
+        mock_get.return_value = mock_response
+
+        result = get_dashboard_stats()
+        assert isinstance(result, dict)
+        assert result["total_flights"] == 560352
+
+    @patch('data.requests.get')
+    def test_fallback_on_error(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_get.return_value = mock_response
+
+        result = get_dashboard_stats()
+        assert isinstance(result, dict)
+        assert "total_flights" in result
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# API Health Check Tests
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestApiHealthy:
+    """Test api_healthy() function."""
+
+    @patch('data.requests.get')
+    def test_returns_true_when_api_up(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_get.return_value = mock_response
+
+        assert api_healthy() == True
+
+    @patch('data.requests.get')
+    def test_returns_false_when_api_down(self, mock_get):
+        import requests
+        mock_get.side_effect = requests.exceptions.ConnectionError()
+
+        assert api_healthy() == False
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Summary Stats Tests
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestGetSummaryStats:
+    """Test get_summary_stats() function."""
+
+    @patch('data.get_flights_df')
+    def test_returns_dict(self, mock_get_flights):
+        mock_get_flights.return_value = _mock()
+
+        result = get_summary_stats()
+        assert isinstance(result, dict)
+
+    @patch('data.get_flights_df')
+    def test_has_required_keys(self, mock_get_flights):
+        mock_get_flights.return_value = _mock()
+
+        result = get_summary_stats()
+        required = ["total_flights", "delayed_flights", "delay_rate",
+                     "avg_dep_delay", "airlines", "routes"]
+        for key in required:
+            assert key in result, f"Missing key: {key}"
+
+    @patch('data.get_flights_df')
+    def test_total_flights_correct(self, mock_get_flights):
+        mock_get_flights.return_value = _mock()
+
+        result = get_summary_stats()
+        assert result["total_flights"] == 2000
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Live Flights Tests
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestGetLiveFlights:
+    """Test get_live_flights() function."""
+
+    @patch('data.requests.get')
+    def test_returns_list_on_success(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"data": [{"callsign": "TEST123"}]}
+        mock_get.return_value = mock_response
+
+        result = get_live_flights()
+        assert isinstance(result, list)
+
+    @patch('data.requests.get')
+    def test_returns_empty_on_error(self, mock_get):
+        import requests
+        mock_get.side_effect = requests.exceptions.ConnectionError()
+
+        result = get_live_flights()
+        assert result == []
